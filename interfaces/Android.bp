@@ -2,3 +2,7 @@ hidl_package_root {
     name: "vendor.oplus",
     path: "hardware/oplus/interfaces/oplus",
 }
+
+subdirs = [
+    "aidl",
+]
