@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <aidl/vendor/chen/aidl/syshelper/IUdfpsHelperCallback.h>
+#include <aidl/vendor/chen/aidl/syshelper/BnUdfpsHelperCallback.h>
+#include <aidl/vendor/chen/aidl/syshelper/IUdfpsHelper.h>
+
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
 #include <android/hardware/sensors/2.1/types.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -32,6 +38,10 @@ using ::android::hardware::sensors::V1_0::Result;
 using ::android::hardware::sensors::V2_1::Event;
 using ::android::hardware::sensors::V2_1::SensorInfo;
 using ::android::hardware::sensors::V2_1::SensorType;
+
+using ::aidl::vendor::chen::aidl::syshelper::IUdfpsHelper;
+using ::aidl::vendor::chen::aidl::syshelper::IUdfpsHelperCallback;
+using ::aidl::vendor::chen::aidl::syshelper::BnUdfpsHelperCallback;
 
 namespace android {
 namespace hardware {
@@ -98,17 +108,16 @@ class UdfpsSensor : public OneShotSensor {
 
     virtual void activate(bool enable) override;
     virtual void setOperationMode(OperationMode mode) override;
+    void postEventChen(int x, int y);
+    bool currentPressedDown;
 
   protected:
     virtual void run() override;
     virtual std::vector<Event> readEvents();
 
   private:
-    void interruptPoll();
-
-    struct pollfd mPolls[2];
-    int mWaitPipeFd[2];
-    int mPollFd;
+    std::shared_ptr<IUdfpsHelper> mChenUdfpsHelper;
+    std::shared_ptr<IUdfpsHelperCallback> mChenUdfpsHelperCallback;
 
     int mScreenX;
     int mScreenY;

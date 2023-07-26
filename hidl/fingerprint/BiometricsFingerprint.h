@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <aidl/vendor/chen/aidl/syshelper/IUdfpsHelper.h>
+
 #include <android-base/properties.h>
 #include <android/hardware/biometrics/fingerprint/2.1/types.h>
 #include <android/hardware/biometrics/fingerprint/2.2/IBiometricsFingerprintClientCallback.h>
@@ -25,8 +27,9 @@
 #include <hidl/Status.h>
 #include <log/log.h>
 
-#include <oplus/oplus_display_panel.h>
 #include <vendor/oplus/hardware/biometrics/fingerprint/2.1/IBiometricsFingerprint.h>
+
+#include <fstream>
 
 namespace android {
 namespace hardware {
@@ -34,6 +37,9 @@ namespace biometrics {
 namespace fingerprint {
 namespace V2_3 {
 namespace implementation {
+
+#define FP_PRESS_PATH "/sys/kernel/oplus_display/notify_fppress"
+#define DIMLAYER_PATH "/sys/kernel/oplus_display/dimlayer_hbm"
 
 using ::android::sp;
 using ::android::base::GetProperty;
@@ -45,6 +51,8 @@ using ::android::hardware::biometrics::fingerprint::V2_1::RequestStatus;
 using ::android::hardware::biometrics::fingerprint::V2_2::FingerprintAcquiredInfo;
 using ::android::hardware::biometrics::fingerprint::V2_2::IBiometricsFingerprintClientCallback;
 using ::android::hardware::biometrics::fingerprint::V2_3::IBiometricsFingerprint;
+
+using aidl::vendor::chen::aidl::syshelper::IUdfpsHelper;
 
 using IOplusBiometricsFingerprint =
         vendor::oplus::hardware::biometrics::fingerprint::V2_1::IBiometricsFingerprint;
@@ -108,6 +116,24 @@ class BiometricsFingerprint : public IBiometricsFingerprint,
                                   uint32_t resultLen) override;
 
   private:
+    /*
+     * Write value to path and close file.
+     */
+    template <typename T>
+    void set(const std::string& path, const T& value) {
+        std::ofstream file(path);
+        file << value;
+    }
+
+    template <typename T>
+    T get(const std::string& path, const T& def) {
+        std::ifstream file(path);
+        T result;
+
+        file >> result;
+        return file.fail() ? def : result;
+    }
+
     bool isUdfps() {
         // We need to rely on `persist.vendor.fingerprint.sensor_type` here because we can't get our
         // sensorId from anywhere.
@@ -115,17 +141,25 @@ class BiometricsFingerprint : public IBiometricsFingerprint,
     }
 
     bool setDimlayerHbm(unsigned int value) {
-        return isUdfps() && ioctl(mOplusDisplayFd, PANEL_IOCTL_SET_DIMLAYER_HBM, &value) == 0;
+        set(DIMLAYER_PATH, value);
+        return isUdfps() && get(DIMLAYER_PATH, 0) == value;
     }
 
     bool setFpPress(unsigned int value) {
-        return isUdfps() && ioctl(mOplusDisplayFd, PANEL_IOCTL_SET_FP_PRESS, &value) == 0;
+        set(FP_PRESS_PATH, value);
+        return isUdfps();
     }
 
     sp<IOplusBiometricsFingerprint> mOplusBiometricsFingerprint;
+    std::shared_ptr<IUdfpsHelper> mChenUdfpsHelper;
     sp<V2_1::IBiometricsFingerprintClientCallback> mClientCallback;
 
-    int mOplusDisplayFd;
+    typedef enum fingerprint_callback_cmd_Id {
+        FINGERPRINT_CALLBACK_CMD_ID_NONE = 0,
+        FINGERPRINT_CALLBACK_CMD_ID_BASE = 1200,
+        FINGERPRINT_CALLBACK_CMD_ID_ON_TOUCH_DOWN = 1201,
+        FINGERPRINT_CALLBACK_CMD_ID_ON_TOUCH_UP = 1202,
+    } fingerprint_callback_cmd_Id_t;
 };
 
 }  // namespace implementation
