@@ -3,3 +3,6 @@ vendor_hal_attribute(oplusSensor)
 vendor_hal_attribute(oplus_cammidasservice)
 vendor_hal_attribute(oplus_performance)
 vendor_hal_attribute(oplus_project)
+attribute hal_chen_syshelper;
+attribute hal_chen_syshelper_client;
+attribute hal_chen_syshelper_server;

@@ -7,3 +7,8 @@ rw_dir_file(hal_sensors_default, vendor_persist_engineer_file)
 rw_dir_file(hal_sensors_default, vendor_proc_display)
 rw_dir_file(hal_sensors_default, vendor_sysfs_graphics)
 rw_dir_file(hal_sensors_default, vendor_sysfs_sensor_fb)
+binder_use(hal_sensors_default)
+binder_call(hal_chen_syshelper_default, hal_sensors_default)
+hal_client_domain(hal_sensors_default, hal_chen_syshelper)
+
+r_dir_file(hal_sensors_default, vendor_proc_oplus_als_file)

@@ -4,7 +4,8 @@
 (type new_objects)
 (typeattribute new_objects)
 (typeattributeset new_objects
-  ( new_objects
+  ( als_correction_service
+    new_objects
     system_fingerprint_prop
     system_oplus_iris_prop
     system_oplus_project_prop
