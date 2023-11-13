@@ -50,8 +50,8 @@ using aidl::vendor::chen::aidl::syshelper::BnALSHelperCallback;
 using aidl::vendor::chen::aidl::syshelper::IALSHelper;
 using aidl::vendor::chen::aidl::syshelper::ScreenShotInfo;
 
-static Rect screenshot_rect(667, 19, 707, 49);
-static Rect screenshot_rect_land(1080 - 707, 2400 - 49, 1080 - 667, 2340 - 19);
+static Rect screenshot_rect(708, 21, 740, 53);
+static Rect screenshot_rect_land(1080 - 740, 2412 - 53, 1080 - 708, 2340 - 21);
 
 class AlsCorrection {
   public:
