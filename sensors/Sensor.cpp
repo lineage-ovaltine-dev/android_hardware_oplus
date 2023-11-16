@@ -16,13 +16,41 @@
 
 #include "Sensor.h"
 
-#include <android/binder_manager.h>
-#include <android/binder_process.h>
 #include <hardware/sensors.h>
 #include <log/log.h>
 #include <utils/SystemClock.h>
 
 #include <cmath>
+
+namespace {
+
+static bool readFpState(int fd, int& screenX, int& screenY) {
+    char buffer[512];
+    int state = 0;
+    int rc;
+
+    rc = lseek(fd, 0, SEEK_SET);
+    if (rc) {
+        ALOGE("failed to seek: %d", rc);
+        return false;
+    }
+
+    rc = read(fd, &buffer, sizeof(buffer));
+    if (rc < 0) {
+        ALOGE("failed to read state: %d", rc);
+        return false;
+    }
+
+    rc = sscanf(buffer, "%d,%d,%d", &screenX, &screenY, &state);
+    if (rc < 0) {
+        ALOGE("failed to parse fp state: %d", rc);
+        return false;
+    }
+
+    return state > 0;
+}
+
+}  // anonymous namespace
 
 namespace android {
 namespace hardware {
@@ -205,45 +233,58 @@ UdfpsSensor::UdfpsSensor(int32_t sensorHandle, ISensorsEventCallback* callback)
     mSensorInfo.power = 0;
     mSensorInfo.flags |= SensorFlagBits::WAKE_UP;
 
-    currentPressedDown = false;
+    int rc;
 
-    std::string instanceName = std::string() + IUdfpsHelper::descriptor + "/default";
-    bool isSupportChenSysHelper = AServiceManager_isDeclared(instanceName.c_str());
-    if (!isSupportChenSysHelper) {
-        ALOGE("Chen System Helper is NOT Declared!!");
+    rc = pipe(mWaitPipeFd);
+    if (rc < 0) {
+        mWaitPipeFd[0] = -1;
+        mWaitPipeFd[1] = -1;
+        ALOGE("failed to open wait pipe: %d", rc);
     }
-    mChenUdfpsHelper = IUdfpsHelper::fromBinder(ndk::SpAIBinder(AServiceManager_waitForService(instanceName.c_str())));
-    ALOGI("Loaded mChenUdfpsHelper!");
 
-    ALOGI("Udfps Init Done!");
+    mPollFd = open("/sys/kernel/oplus_display/fp_state", O_RDONLY);
+    if (mPollFd < 0) {
+        ALOGE("failed to open poll fd: %d", mPollFd);
+    }
+
+    if (mWaitPipeFd[0] < 0 || mWaitPipeFd[1] < 0 || mPollFd < 0) {
+        mStopThread = true;
+        return;
+    }
+
+    mPolls[0] = {
+            .fd = mWaitPipeFd[0],
+            .events = POLLIN,
+    };
+
+    mPolls[1] = {
+            .fd = mPollFd,
+            .events = POLLERR | POLLPRI,
+    };
 }
 
 UdfpsSensor::~UdfpsSensor() {
-    if (mChenUdfpsHelperCallback != nullptr) {
-        mChenUdfpsHelper->unregisterCallback(mChenUdfpsHelperCallback);
-    }
-}
-
-void UdfpsSensor::postEventChen(int x, int y) {
-    ALOGI("postEventChen %d %d!", x, y);
-
-    mScreenX = x;
-    mScreenY = y;
-    // mCallback->postEvents(readEvents(), isWakeUpSensor());
+    interruptPoll();
 }
 
 void UdfpsSensor::activate(bool enable) {
-    Sensor::activate(enable);
-    ALOGI("activate %d!", enable);
+    std::lock_guard<std::mutex> lock(mRunMutex);
+
+    if (mIsEnabled != enable) {
+        mIsEnabled = enable;
+
+        interruptPoll();
+        mWaitCV.notify_all();
+    }
 }
 
 void UdfpsSensor::setOperationMode(OperationMode mode) {
     Sensor::setOperationMode(mode);
+    interruptPoll();
 }
 
 void UdfpsSensor::run() {
     std::unique_lock<std::mutex> runLock(mRunMutex);
-    constexpr int64_t kNanosecondsInSeconds = 1000 * 1000 * 1000;
 
     while (!mStopThread) {
         if (!mIsEnabled || mMode == OperationMode::DATA_INJECTION) {
@@ -251,26 +292,24 @@ void UdfpsSensor::run() {
                 return ((mIsEnabled && mMode == OperationMode::NORMAL) || mStopThread);
             });
         } else {
-            timespec curTime;
-            clock_gettime(CLOCK_REALTIME, &curTime);
-            int64_t now = (curTime.tv_sec * kNanosecondsInSeconds) + curTime.tv_nsec;
-            int64_t nextSampleTime = mLastSampleTimeNs + mSamplingPeriodNs;
+            // Cannot hold lock while polling.
+            runLock.unlock();
+            int rc = poll(mPolls, 2, -1);
+            runLock.lock();
 
-            if (now >= nextSampleTime) {
-                mLastSampleTimeNs = now;
-                nextSampleTime = mLastSampleTimeNs + mSamplingPeriodNs;
-                if (mChenUdfpsHelper->getTouchStatus(&currentPressedDown).isOk()) {
-                    if (currentPressedDown) {
-                        postEventChen(540, 2150);
-                        ALOGI("get TouchDown, post Events and disable the sensor!!");
-                        mCallback->postEvents(readEvents(), isWakeUpSensor());
-                        currentPressedDown = false;
-                        mIsEnabled = false;
-                    }
-                }
+            if (rc < 0) {
+                ALOGE("failed to poll: %d", rc);
+                mStopThread = true;
+                continue;
             }
 
-            mWaitCV.wait_for(runLock, std::chrono::nanoseconds(nextSampleTime - now));
+            if (mPolls[1].revents == mPolls[1].events && readFpState(mPollFd, mScreenX, mScreenY)) {
+                mIsEnabled = false;
+                mCallback->postEvents(readEvents(), isWakeUpSensor());
+            } else if (mPolls[0].revents == mPolls[0].events) {
+                char buf;
+                read(mWaitPipeFd[0], &buf, sizeof(buf));
+            }
         }
     }
 }
@@ -285,6 +324,13 @@ std::vector<Event> UdfpsSensor::readEvents() {
     event.u.data[1] = mScreenY;
     events.push_back(event);
     return events;
+}
+
+void UdfpsSensor::interruptPoll() {
+    if (mWaitPipeFd[1] < 0) return;
+
+    char c = '1';
+    write(mWaitPipeFd[1], &c, sizeof(c));
 }
 
 }  // namespace implementation
